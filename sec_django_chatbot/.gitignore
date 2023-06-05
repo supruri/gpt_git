@@ -1,6 +1,7 @@
 
 # Ignore the config.py file that stores sensitive information
 /secret.py
+/secret.py.template
 # Ignore any compiled Python files
 *.pyc
 # Ignore the __pycache__ directory

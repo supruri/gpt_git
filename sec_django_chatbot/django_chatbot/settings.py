@@ -11,7 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
-from ..secret import openai_api_key, SECRET_KEY
+from secret import openai_api_key, SECRET_KEY
 
 # Use SECRET_API_KEY in your Django settings
 gitignore_openai_api_key = openai_api_key

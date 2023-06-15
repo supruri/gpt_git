@@ -9,11 +9,14 @@ from .models import Chat
 from django.utils import timezone
 
 from secret import openai_api_key
+from secret import vision_api_key
 
 from PyPDF2 import PdfReader
+import logging
+import azure.functions as func
 import os
-import boto3
 import requests
+from azure.storage.blob import BlobServiceClient
 
 
 openai.api_key = openai_api_key
@@ -99,52 +102,45 @@ def logout(request):
     return redirect("login")
 
 
-def process_all_pdfs_in_bucket(bucket_name):
-    s3 = boto3.client('s3')
-    response = s3.list_objects_v2(Bucket=bucket_name)
+# OCR 처리를 위한 Computer Vision API endpoint와 key
+vision_api_url = "https://joonchatbot.cognitiveservices.azure.com/"
 
-    file_list = []
-    for obj in response['Contents']:
-        file_key = obj['Key']
-        if file_key.lower().endswith('.pdf'):
-            file_list.append(file_key)
-
-    for file_key in file_list:
-        # S3에서 PDF 파일 다운로드
-        response = s3.get_object(Bucket=bucket_name, Key=file_key)
-        pdf_data = response['Body'].read()
-
-        # Textract 호출 및 결과 반환
-        textract = boto3.client('textract')
-        response = textract.start_document_text_detection(
-            Document={'Bytes': pdf_data}
-        )
-        job_id = response['JobId']
-
-        # Textract 작업 완료 대기
-        waiter = textract.get_waiter('text_detection_complete')
-        waiter.wait(JobId=job_id)
-
-        # Textract 결과 가져오기
-        response = textract.get_document_text_detection(JobId=job_id)
-        text = ''
-        for item in response['Blocks']:
-            if item['BlockType'] == 'LINE':
-                text += item['Text'] + '\n'
-
-        # 추출된 텍스트를 사용하여 후속 작업 수행
-
-        # 작업 결과 출력 또는 저장 등 필요한 작업 수행
-        print('Processed file:', file_key)
-        print('Extracted text:', text)
-        print('---')
+# Azure Blob Storage 연결 문자열 및 컨테이너 이름
+connection_string = "<your-storage-account-connection-string>"
+container_name = "<your-blob-container-name>"
 
 
-# S3 버킷 이름 설정
-bucket_name = 'joon-chatbot'
+def main(mytimer: func.TimerRequest) -> None:
+    if mytimer.past_due:
+        logging.info('Timer function is running behind.')
 
-# S3 버킷 내 모든 PDF 파일 처리
-process_all_pdfs_in_bucket(bucket_name)
+    # Blob 컨테이너에 접근
+    blob_service_client = BlobServiceClient.from_connection_string(
+        connection_string)
+    container_client = blob_service_client.get_container_client(container_name)
+
+    # 컨테이너 내의 모든 blob을 처리
+    for blob in container_client.list_blobs():
+        logging.info(f"Processing blob: {blob.name}")
+
+        # Blob 데이터를 읽음
+        blob_client = container_client.get_blob_client(blob.name)
+        blob_data = blob_client.download_blob().readall()
+
+        # PDF 파일 OCR 처리
+        headers = {'Ocp-Apim-Subscription-Key': vision_api_key}
+        params = {'language': 'unk', 'detectOrientation': 'true'}
+        response = requests.post(
+            vision_api_url, headers=headers, params=params, data=blob_data)
+        response.raise_for_status()
+        analysis = response.json()
+
+        # OCR 결과 처리 (예: 텍스트 추출)
+        text = ""
+        for region in analysis["regions"]:
+            for line in region["lines"]:
+                for word in line["words"]:
+                    text += word["text"] + " "
 
 # 이 함수를 사용하여 PDF 파일의 텍스트를 추출하고, 추출한 텍스트를 챗봇으로 전달하여 질문에 대한 답변을 찾을 수 있습니다.
 

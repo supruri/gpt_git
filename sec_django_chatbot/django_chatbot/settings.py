@@ -19,6 +19,13 @@ gitignore_openai_api_key = openai_api_key
 # SECURITY WARNING: keep the secret key used in production secret!
 gitignore_SECRET_KEY = SECRET_KEY
 
+# azure settings
+DEFAULT_FILE_STORAGE = 'storages.backends.azure_storage.AzureStorage'
+
+AZURE_ACCOUNT_NAME = 'your_account_name'
+AZURE_ACCOUNT_KEY = 'your_account_key'
+AZURE_CONTAINER = 'your_container_name'
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -41,7 +48,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "chatbot"
+    "chatbot",
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
@@ -52,6 +60,12 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.common.CommonMiddleware',
+]
+
+CORS_ORIGIN_WHITELIST = [
+    'https://chatbottell.pages.dev',  # 허용할 사이트의 도메인 주소를 추가하세요
 ]
 
 ROOT_URLCONF = "django_chatbot.urls"

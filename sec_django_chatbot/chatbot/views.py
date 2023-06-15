@@ -12,6 +12,9 @@ from secret import openai_api_key
 
 from PyPDF2 import PdfReader
 import os
+import boto3
+import requests
+
 
 openai.api_key = openai_api_key
 
@@ -19,7 +22,7 @@ openai.api_key = openai_api_key
 # complementary chat configuration
 def ask_openai(message):
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model="gpt-3.5-turbo",  # "gpt-4"
 
 
         # system, assistant, user
@@ -96,16 +99,52 @@ def logout(request):
     return redirect("login")
 
 
-# 여러 PDF파일이 보관되어 있는 폴더의 주소를 입력하면 폴더 내 모든 PDF를 읽어오게 하려고 폴더의 주소를 사용자에게 입력받고, 폴더 내에 있는 모든 PDF 파일의 주소를 f_list 에 저장한다.
+def process_all_pdfs_in_bucket(bucket_name):
+    s3 = boto3.client('s3')
+    response = s3.list_objects_v2(Bucket=bucket_name)
 
-
-def save_file_list(path):
     file_list = []
-    for root, dirs, files in os.walk(path):
-        for file_name in files:
-            if file_name[-4:] == '.pdf':
-                file_list.append(root+'/'+file_name)
-    return file_list
+    for obj in response['Contents']:
+        file_key = obj['Key']
+        if file_key.lower().endswith('.pdf'):
+            file_list.append(file_key)
+
+    for file_key in file_list:
+        # S3에서 PDF 파일 다운로드
+        response = s3.get_object(Bucket=bucket_name, Key=file_key)
+        pdf_data = response['Body'].read()
+
+        # Textract 호출 및 결과 반환
+        textract = boto3.client('textract')
+        response = textract.start_document_text_detection(
+            Document={'Bytes': pdf_data}
+        )
+        job_id = response['JobId']
+
+        # Textract 작업 완료 대기
+        waiter = textract.get_waiter('text_detection_complete')
+        waiter.wait(JobId=job_id)
+
+        # Textract 결과 가져오기
+        response = textract.get_document_text_detection(JobId=job_id)
+        text = ''
+        for item in response['Blocks']:
+            if item['BlockType'] == 'LINE':
+                text += item['Text'] + '\n'
+
+        # 추출된 텍스트를 사용하여 후속 작업 수행
+
+        # 작업 결과 출력 또는 저장 등 필요한 작업 수행
+        print('Processed file:', file_key)
+        print('Extracted text:', text)
+        print('---')
+
+
+# S3 버킷 이름 설정
+bucket_name = 'joon-chatbot'
+
+# S3 버킷 내 모든 PDF 파일 처리
+process_all_pdfs_in_bucket(bucket_name)
 
 # 이 함수를 사용하여 PDF 파일의 텍스트를 추출하고, 추출한 텍스트를 챗봇으로 전달하여 질문에 대한 답변을 찾을 수 있습니다.
 
@@ -118,50 +157,57 @@ def extract_text_from_pdf(file_path):
             text += page.extract_text()
     return text
 
-# Select GPT Model
-# while True:
-#     GPT_model = input(
-#         "Select a GPT Model\n• text-davinci-003 : Fast, Moderate Quality results\n• gpt-4 : Slow, Great Quality results\n>> ").strip()
-#     if GPT_model != 'text-davinci-003' and GPT_model != 'gpt-4':
-#         print("Type the name of the model correctly\n")
-#     else:
-#         break
+
+def perform_post_processing(text):
+    # 추출된 텍스트를 다른 서비스로 전송하는 경우
+    api_url = 'https://chatbottell.pages.dev'
+    payload = {'text': text}
+    response = requests.post(api_url, json=payload)
+    if response.status_code == 200:
+        print('Text sent successfully!')
+    else:
+        print('Error sending text:', response.status_code)
 
 
-# Input folder directory
-file_path = input("Enter folder directory for PDFs >> ").strip()
-f_list = save_file_list(file_path)
-print(f'Total of {len(f_list)} PDFs')
+def chatbottell(request):
+    if request.method == 'POST':
+        data = request.POST
+        user_messages = data.getlist('userMessages[]')
+        assistant_messages = data.getlist('assistantMessages[]')
 
-for i in range(len(f_list)):
-    # Initialize texts string
-    texts = ''
+        # 위의 구문들을 순차적으로 뽑아오기 위한 구문 &&(and) 대신 ||(or)을 사용
+        messages = []
+        while user_messages or assistant_messages:
+            if user_messages:
+                messages.append({
+                    "role": "user",
+                    "content": user_messages.pop(0).replace("\n", "")
+                })
+            if assistant_messages:
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_messages.pop(0).replace("\n", "")
+                })
 
-    # Initialize answer string
-    ans = ''
+        # ChatGPT API 오류 시 재시도하는 코드 작성
+        max_retries = 3
+        retries = 0
+        completion = None
+        while retries < max_retries:
+            try:
+                completion = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages
+                )
+                break
+            except Exception as e:
+                retries += 1
+                print(e)
+                print(
+                    f"Error fetching data, retrying ({retries}/{max_retries})...")
 
-    # Fetch file directory from file list array
-    f_dir = f_list[i]
+        chatbottell = completion.choices[0].message["content"]
 
-    # # Set output location, name
-    # output = file_path + '/' + \
-    #     os.path.splitext(os.path.basename(f_dir))[0] + '_GPTAnswer' + ".txt"
-
-    # # Read PDF and save answer
-    # with open(f_dir, "rb") as f:
-    #     pdf_reader = PdfReader(f)
-    #     for page in pdf_reader.pages:
-    #         texts += page.extract_text()
-
-    # print(f'PDF #{i + 1} Solving...')
-    # ans = ask_openai(texts)
-
-    # # Write answer to txt file
-    # with open(output, "w", encoding='utf-8') as file:
-    #     try:
-    #         file.write(ans+"\n")
-    #     except UnicodeEncodeError:
-    #         print(f'PDF #{i+1} Error!')
-    #         continue
-
-    # print(f'PDF #{i+1} Complete!')
+        return JsonResponse({"assistant": chatbottell})
+    else:
+        return JsonResponse({"error": "Invalid request method."})
